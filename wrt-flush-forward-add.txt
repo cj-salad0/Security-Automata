@@ -1,0 +1,73 @@
+#!/bin/sh
+
+# Function to delete only FORWARD rules between a specific source and destination zone.
+# Leaves router-input rules (no 'dest') and NAT/1:1 redirects ('firewall.@redirect') untouched.
+# Usage: flush_forward_rules <src_zone> <dest_zone>
+flush_forward_rules() {
+    local target_src="$1"
+    local target_dest="$2"
+    local idx=0
+
+    while uci -q get firewall.@rule[$idx] >/dev/null; do
+        local curr_src="$(uci -q get firewall.@rule[$idx].src)"
+        local curr_dest="$(uci -q get firewall.@rule[$idx].dest)"
+
+        if [ "$curr_src" = "$target_src" ] && [ "$curr_dest" = "$target_dest" ]; then
+            uci delete firewall.@rule[$idx]
+        else
+            idx=$((idx + 1))
+        fi
+    done
+}
+
+# Modular function to add a firewall forward rule
+# Usage: add_forward_rule <name> <src_zone> <dest_zone> <proto> <port> [enabled: 1|0]
+add_forward_rule() {
+    local name="$1"
+    local src="$2"
+    local dest="$3"
+    local proto="$4"
+    local port="$5"
+    local enabled="${6:-1}" # Defaults to '1' (enabled) if omitted
+
+    uci add firewall rule >/dev/null
+    uci set firewall.@rule[-1].name="$name"
+    uci set firewall.@rule[-1].src="$src"
+    uci set firewall.@rule[-1].dest="$dest"
+    uci set firewall.@rule[-1].proto="$proto"
+    uci set firewall.@rule[-1].dest_port="$port"
+    uci set firewall.@rule[-1].target='ACCEPT'
+    uci set firewall.@rule[-1].enabled="$enabled"
+}
+
+# --- 1. FLUSH & REBUILD WAN -> LAN FORWARD RULES ---
+flush_forward_rules "wan" "lan"
+
+add_forward_rule "Allow-WAN-LAN-SSH"         "wan" "lan" "tcp"     "22"
+add_forward_rule "Allow-WAN-LAN-HTTPS"       "wan" "lan" "tcp"     "443"
+add_forward_rule "Allow-WAN-LAN-HTTP"        "wan" "lan" "tcp"     "80"
+add_forward_rule "Allow-WAN-LAN-RDP"         "wan" "lan" "tcp"     "3389"
+add_forward_rule "Allow-WAN-LAN-DNS-TCP"     "wan" "lan" "tcp"     "53"
+add_forward_rule "Allow-WAN-LAN-VNC"         "wan" "lan" "tcp"     "5900"
+add_forward_rule "Allow-WAN-LAN-IMAPS"       "wan" "lan" "tcp"     "993"
+add_forward_rule "Allow-WAN-LAN-IMAP"        "wan" "lan" "tcp"     "143"
+add_forward_rule "Allow-WAN-LAN-POP3S"       "wan" "lan" "tcp"     "995"
+add_forward_rule "Allow-WAN-LAN-POP3"        "wan" "lan" "tcp"     "110"
+add_forward_rule "Allow-WAN-LAN-Kerberos"    "wan" "lan" "tcp udp" "88"
+add_forward_rule "Allow-WAN-LAN-LDAP"        "wan" "lan" "tcp"     "389"
+add_forward_rule "Allow-WAN-LAN-NetBIOS"     "wan" "lan" "tcp udp" "139"
+add_forward_rule "Allow-WAN-LAN-FTP-Control" "wan" "lan" "tcp"     "21"
+add_forward_rule "Allow-WAN-LAN-FTP-Data"    "wan" "lan" "tcp"     "20"
+add_forward_rule "Allow-WAN-LAN-TFTP"        "wan" "lan" "udp"     "69"
+
+# --- 2. FLUSH & REBUILD LAN -> WAN FORWARD RULES ---
+flush_forward_rules "lan" "wan"
+
+add_forward_rule "Allow-LAN-WAN-DNS"         "lan" "wan" "tcp udp" "53"
+add_forward_rule "Allow-LAN-WAN-Web-Temp"    "lan" "wan" "tcp"     "80 443" "0"
+
+# Save and apply changes
+uci commit firewall
+service firewall restart
+
+echo "WAN <-> LAN forward rules flushed and rebuilt safely."
